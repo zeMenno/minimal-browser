@@ -1,0 +1,72 @@
+{
+  "name": "minimal-browser",
+  "version": "0.1.1",
+  "private": true,
+  "description": "A minimalist, keyboard-first browser for developers",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "build:main": "esbuild electron/main.ts electron/preload.ts --bundle --platform=node --external:electron --external:better-sqlite3 --outdir=dist-electron --format=cjs",
+    "build:renderer": "vite build",
+    "build": "npm run build:renderer && npm run build:main",
+    "dev": "npm run build:main && concurrently -k \"vite\" \"cross-env MB_DEV=1 electron .\"",
+    "start": "npm run build && electron .",
+    "smoke": "npm run build && cross-env MB_SMOKE=1 electron .",
+    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "typecheck": "tsc --noEmit",
+    "dist": "npm run dist:win",
+    "dist:win": "npm run build && npm run rebuild && electron-builder --win"
+  },
+  "build": {
+    "appId": "com.minimalbrowser.app",
+    "productName": "MinimalBrowser",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist-electron/**/*",
+      "dist/renderer/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "**/node_modules/better-sqlite3/**/*"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
+    "better-sqlite3": "^12.2.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zustand": "^5.0.5"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^3.7.2",
+    "@tailwindcss/vite": "^4.1.8",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.15.0",
+    "@types/react": "^18.3.20",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^4.5.0",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^35.5.1",
+    "electron-builder": "^26.15.2",
+    "esbuild": "^0.25.5",
+    "tailwindcss": "^4.1.8",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}
