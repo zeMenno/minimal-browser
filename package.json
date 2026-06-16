@@ -1,6 +1,6 @@
 {
   "name": "minimal-browser",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "private": true,
   "description": "A minimalist, keyboard-first browser for developers",
   "main": "dist-electron/main.js",
