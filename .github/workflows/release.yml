@@ -78,7 +78,7 @@ jobs:
             release/*.exe.blockmap
             release/*.AppImage
             release/*.deb
-            release/*.yml
+            release/latest*.yml
 
   publish:
     needs: build
