@@ -1,0 +1,40 @@
+name: Release
+
+# Cut a release by pushing a version tag, e.g. `v0.4.0`. The build is uploaded
+# to the GitHub Release for that tag (installer + latest.yml), which is what the
+# in-app auto-updater reads. Can also be run manually from the Actions tab.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build renderer + main
+        run: npm run build
+
+      - name: Rebuild native modules for Electron
+        run: npm run rebuild
+
+      - name: Build and publish (electron-builder)
+        run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

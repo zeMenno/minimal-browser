@@ -1,11 +1,11 @@
 {
   "name": "minimal-browser",
-  "version": "0.1.1",
+  "version": "0.4.0",
   "private": true,
   "description": "A minimalist, keyboard-first browser for developers",
   "main": "dist-electron/main.js",
   "scripts": {
-    "build:main": "esbuild electron/main.ts electron/preload.ts --bundle --platform=node --external:electron --external:better-sqlite3 --outdir=dist-electron --format=cjs",
+    "build:main": "esbuild electron/main.ts electron/preload.ts --bundle --platform=node --external:electron --external:better-sqlite3 --external:electron-updater --outdir=dist-electron --format=cjs",
     "build:renderer": "vite build",
     "build": "npm run build:renderer && npm run build:main",
     "dev": "npm run build:main && concurrently -k \"vite\" \"cross-env MB_DEV=1 electron .\"",
@@ -22,6 +22,13 @@
     "directories": {
       "output": "release"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "zeMenno",
+        "repo": "minimal-browser"
+      }
+    ],
     "files": [
       "dist-electron/**/*",
       "dist/renderer/**/*",
@@ -40,7 +47,8 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+      "createStartMenuShortcut": true,
+      "include": "build/installer.nsh"
     }
   },
   "dependencies": {
@@ -48,6 +56,8 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "better-sqlite3": "^12.2.0",
+    "electron-updater": "^6.8.9",
+    "extract-zip": "^2.0.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zustand": "^5.0.5"

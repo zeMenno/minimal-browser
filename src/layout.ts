@@ -73,6 +73,85 @@ export function splitLeaf(
   });
 }
 
+export interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * Compute a rectangle for every leaf by walking the split tree and dividing
+ * each split's box by its `sizes`. Coordinates are whatever unit `box` uses
+ * (callers pass a normalized 0..1 box), which is enough for adjacency tests.
+ */
+export function computeRects(
+  node: LayoutNode | null,
+  box: Rect,
+  out: Record<string, Rect> = {}
+): Record<string, Rect> {
+  if (!node) return out;
+  if (node.type === "leaf") {
+    out[node.id] = box;
+    return out;
+  }
+  let offset = node.dir === "row" ? box.x : box.y;
+  node.children.forEach((child, i) => {
+    const frac = node.sizes[i] ?? 1 / node.children.length;
+    const childBox: Rect =
+      node.dir === "row"
+        ? { x: offset, y: box.y, w: box.w * frac, h: box.h }
+        : { x: box.x, y: offset, w: box.w, h: box.h * frac };
+    computeRects(child, childBox, out);
+    offset += (node.dir === "row" ? box.w : box.h) * frac;
+  });
+  return out;
+}
+
+/**
+ * Pick the leaf id nearest to `activeId` in the given direction. Considers only
+ * panes that lie on the correct side and overlap the active pane on the
+ * perpendicular axis, then chooses the closest edge.
+ */
+export function paneInDirection(
+  rects: Record<string, Rect>,
+  activeId: string,
+  dir: SplitSide
+): string | null {
+  const active = rects[activeId];
+  if (!active) return null;
+  const ac = { x: active.x + active.w / 2, y: active.y + active.h / 2 };
+
+  let best: string | null = null;
+  let bestDist = Infinity;
+  for (const [id, r] of Object.entries(rects)) {
+    if (id === activeId) continue;
+    const rc = { x: r.x + r.w / 2, y: r.y + r.h / 2 };
+    const horizontalOverlap = r.x < active.x + active.w && r.x + r.w > active.x;
+    const verticalOverlap = r.y < active.y + active.h && r.y + r.h > active.y;
+    let onSide = false;
+    let dist = 0;
+    if (dir === "left") {
+      onSide = rc.x < ac.x && verticalOverlap;
+      dist = ac.x - rc.x;
+    } else if (dir === "right") {
+      onSide = rc.x > ac.x && verticalOverlap;
+      dist = rc.x - ac.x;
+    } else if (dir === "up") {
+      onSide = rc.y < ac.y && horizontalOverlap;
+      dist = ac.y - rc.y;
+    } else {
+      onSide = rc.y > ac.y && horizontalOverlap;
+      dist = rc.y - ac.y;
+    }
+    if (onSide && dist < bestDist) {
+      bestDist = dist;
+      best = id;
+    }
+  }
+  return best;
+}
+
 /** Drop leaves whose tab no longer exists (e.g. after corrupted persistence). */
 export function sanitize(
   node: LayoutNode | null,

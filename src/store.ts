@@ -3,26 +3,41 @@ import type {
   LayoutNode,
   PaletteMode,
   PalettePrompt,
+  PermissionRequest,
   SplitSide,
   Tab,
   Workspace,
 } from "./types";
 import {
+  computeRects,
   findLeaf,
   findLeafByTab,
   leaves,
   makeLeaf,
+  paneInDirection,
   removeNode,
   sanitize,
   splitLeaf,
   uid,
   updateNode,
 } from "./layout";
-import { api, normalizeUrl, type PersistedState } from "./api";
+import {
+  api,
+  isExternalProtocol,
+  normalizeUrl,
+  setCustomEngines,
+  type PersistedState,
+} from "./api";
+import type { Theme } from "./theme";
 
 interface ClosedTab {
   tab: Tab;
   workspaceId: string;
+}
+
+/** Each workspace gets its own persistent Chromium session partition. */
+export function partitionOf(workspaceId: string): string {
+  return `persist:ws-${workspaceId}`;
 }
 
 export interface BrowserState {
@@ -42,6 +57,17 @@ export interface BrowserState {
   dragging: boolean;
   resizing: boolean;
   focusAddressNonce: number;
+  findOpen: boolean;
+  addressOpen: boolean;
+  activeDownloadCount: number;
+  theme: Theme | null;
+  themePickerOpen: boolean;
+  introPlaying: boolean;
+  blockerEnabled: boolean;
+  tabMenu: { tabId: string; x: number; y: number } | null;
+  permissionRequests: PermissionRequest[];
+  customEngines: Record<string, { home: string; search: string }>;
+  mediaPanelOpen: boolean;
 
   hydrate: (data: PersistedState) => void;
   newTab: (url?: string, opts?: { activate?: boolean; workspaceId?: string }) => string;
@@ -52,6 +78,7 @@ export interface BrowserState {
   setActivePane: (paneId: string) => void;
   splitActive: (side: SplitSide) => void;
   closeActivePane: () => void;
+  closePane: (paneId: string) => void;
   setSizes: (splitId: string, sizes: number[]) => void;
   dropTabOnPane: (tabId: string, paneId: string, zone: "center" | SplitSide) => void;
   reorderTabs: (workspaceId: string, fromIndex: number, toIndex: number) => void;
@@ -70,6 +97,29 @@ export interface BrowserState {
   setResizing: (resizing: boolean) => void;
   focusAddress: () => void;
   setHtmlFullscreen: (active: boolean) => void;
+  setFindOpen: (open: boolean) => void;
+  setAddressOpen: (open: boolean) => void;
+  pinTab: (tabId: string, pinned: boolean) => void;
+  setActiveDownloadCount: (count: number) => void;
+  setTheme: (theme: Theme | null) => void;
+  setThemePickerOpen: (open: boolean) => void;
+  finishIntro: () => void;
+  setBlockerEnabled: (enabled: boolean) => void;
+  focusPaneDir: (dir: SplitSide) => void;
+  popOutTab: (tabId: string) => void;
+  popInTab: (tabId: string) => void;
+  toggleMute: (tabId: string) => void;
+  duplicateTab: (tabId: string) => void;
+  closeOtherTabs: (tabId: string) => void;
+  closeTabsToRight: (tabId: string) => void;
+  openTabMenu: (tabId: string, x: number, y: number) => void;
+  closeTabMenu: () => void;
+  addPermissionRequest: (req: PermissionRequest) => void;
+  resolvePermissionRequest: (id: number) => void;
+  addCustomEngine: (key: string, home: string, search: string) => void;
+  removeCustomEngine: (key: string) => void;
+  setMediaPanelOpen: (open: boolean) => void;
+  setTabGroup: (tabId: string, group: string | null) => void;
 }
 
 function makeTab(workspaceId: string, url: string): Tab {
@@ -137,6 +187,17 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
   dragging: false,
   resizing: false,
   focusAddressNonce: 0,
+  findOpen: false,
+  addressOpen: false,
+  activeDownloadCount: 0,
+  theme: null,
+  themePickerOpen: false,
+  introPlaying: true,
+  blockerEnabled: true,
+  tabMenu: null,
+  permissionRequests: [],
+  customEngines: {},
+  mediaPanelOpen: false,
 
   hydrate: (data) => {
     if (data.workspaces.length === 0) {
@@ -176,6 +237,7 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
         title: t.title || t.url,
         url: t.url,
         favicon: t.icon ?? undefined,
+        pinned: !!t.pinned,
       };
       tabOrder[t.workspace_id].push(t.id);
     }
@@ -195,6 +257,40 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
     }
 
     const savedActive = data.settings["activeWorkspaceId"];
+    const themeA = data.settings["themeA"];
+    const themeB = data.settings["themeB"];
+    // Closed-tab history survives restarts (reopen with Ctrl+Shift+T).
+    let closedTabs: ClosedTab[] = [];
+    try {
+      const parsed = JSON.parse(data.settings["closedTabs"] ?? "[]");
+      if (Array.isArray(parsed)) {
+        closedTabs = parsed.filter(
+          (c): c is ClosedTab => !!c && typeof c.workspaceId === "string" && !!c.tab
+        );
+      }
+    } catch {
+      closedTabs = [];
+    }
+    // Restore per-tab group labels (persisted as a tabId -> group-name map).
+    try {
+      const groups = JSON.parse(data.settings["tabGroups"] ?? "{}");
+      if (groups && typeof groups === "object") {
+        for (const [tabId, name] of Object.entries(groups)) {
+          if (tabs[tabId] && typeof name === "string" && name) tabs[tabId].group = name;
+        }
+      }
+    } catch {
+      // ignore malformed group data
+    }
+    // User-defined search engines feed the address-bar bang registry.
+    let customEngines: Record<string, { home: string; search: string }> = {};
+    try {
+      const parsed = JSON.parse(data.settings["customEngines"] ?? "{}");
+      if (parsed && typeof parsed === "object") customEngines = parsed;
+    } catch {
+      customEngines = {};
+    }
+    setCustomEngines(customEngines);
     set({
       hydrated: true,
       workspaces,
@@ -202,10 +298,13 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
       tabOrder,
       layouts,
       activePane,
+      closedTabs,
+      customEngines,
       activeWorkspaceId: workspaces.some((w) => w.id === savedActive)
         ? savedActive
         : workspaces[0].id,
       sidebarOpen: data.settings["sidebarOpen"] !== "0",
+      theme: themeA && themeB ? { a: themeA, b: themeB } : null,
     });
   },
 
@@ -226,15 +325,20 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
 
   openUrl: (input) => {
     const url = normalizeUrl(input);
+    // App links (spotify:, vscode:, …) go straight to the OS — no tab.
+    if (isExternalProtocol(url)) {
+      api.openExternal(url);
+      return;
+    }
     const state = get();
     const ws = state.activeWorkspaceId;
     const paneId = state.activePane[ws];
     const leaf = paneId ? findLeaf(state.layouts[ws], paneId) : null;
     if (leaf) {
-      api.navigate(leaf.tabId, url);
+      api.navigate(leaf.tabId, url, partitionOf(ws));
     } else {
       const tabId = state.newTab(url);
-      api.ensureTab(tabId, url);
+      api.ensureTab(tabId, url, partitionOf(ws));
     }
   },
 
@@ -243,6 +347,26 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
     const tab = state.tabs[tabId];
     if (!tab) return;
     const ws = tab.workspaceId;
+    if (tab.pinned) {
+      // Pinned tabs are unclosable: just remove them from the layout so they
+      // return to the pinned list, ready to come back to.
+      set((s) => {
+        let layout = s.layouts[ws];
+        let pane = s.activePane[ws];
+        const leaf = findLeafByTab(layout, tabId);
+        if (!layout || !leaf) return s;
+        layout = removeNode(layout, leaf.id);
+        if (!layout) pane = null;
+        else if (pane === leaf.id || !pane || !findLeaf(layout, pane)) {
+          pane = leaves(layout)[0]?.id ?? null;
+        }
+        return {
+          layouts: { ...s.layouts, [ws]: layout },
+          activePane: { ...s.activePane, [ws]: pane },
+        };
+      });
+      return;
+    }
     set((s) => {
       const tabs = { ...s.tabs };
       delete tabs[tabId];
@@ -339,6 +463,28 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
       return {
         layouts: { ...s.layouts, [ws]: next },
         activePane: { ...s.activePane, [ws]: leaves(next)[0]?.id ?? null },
+      };
+    });
+  },
+
+  // Close a specific pane (the X button on a split pane). The tab stays in the
+  // sidebar; only its pane is removed from the layout.
+  closePane: (paneId) => {
+    const state = get();
+    const ws = state.activeWorkspaceId;
+    const layout = state.layouts[ws];
+    if (!layout || !findLeaf(layout, paneId)) return;
+    set((s) => {
+      const next = removeNode(s.layouts[ws]!, paneId);
+      let pane = s.activePane[ws];
+      if (!next) {
+        pane = null;
+      } else if (!pane || pane === paneId || !findLeaf(next, pane)) {
+        pane = leaves(next)[0]?.id ?? null;
+      }
+      return {
+        layouts: { ...s.layouts, [ws]: next },
+        activePane: { ...s.activePane, [ws]: pane },
       };
     });
   },
@@ -484,6 +630,9 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
         activePane: { ...s.activePane, [sourceWs]: sourcePane },
       };
     });
+    // Sessions are per-workspace, so the view must be recreated under the
+    // target workspace's partition next time the tab is shown.
+    api.closeTab(tabId);
   },
 
   updateTabMeta: (tabId, patch) => {
@@ -510,6 +659,157 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
   setResizing: (resizing) => set({ resizing }),
   focusAddress: () => set((s) => ({ focusAddressNonce: s.focusAddressNonce + 1 })),
   setHtmlFullscreen: (active) => set({ htmlFullscreen: active }),
+  setFindOpen: (open) => set({ findOpen: open }),
+  setAddressOpen: (open) => set({ addressOpen: open }),
+
+  pinTab: (tabId, pinned) => {
+    set((s) =>
+      s.tabs[tabId] ? { tabs: { ...s.tabs, [tabId]: { ...s.tabs[tabId], pinned } } } : s
+    );
+  },
+
+  setActiveDownloadCount: (count) => {
+    if (get().activeDownloadCount !== count) set({ activeDownloadCount: count });
+  },
+
+  setTheme: (theme) => set({ theme }),
+  setThemePickerOpen: (open) => set({ themePickerOpen: open }),
+  finishIntro: () => set({ introPlaying: false }),
+  setBlockerEnabled: (enabled) => set({ blockerEnabled: enabled }),
+
+  // Detach the tab into a floating window: keep it in the store (and sidebar)
+  // but remove it from the layout so its pane closes. Main owns the live view.
+  popOutTab: (tabId) => {
+    const state = get();
+    const tab = state.tabs[tabId];
+    if (!tab || tab.poppedOut) return;
+    const ws = tab.workspaceId;
+    api.popoutTab(tabId);
+    set((s) => {
+      let layout = s.layouts[ws];
+      let pane = s.activePane[ws];
+      const leaf = findLeafByTab(layout, tabId);
+      if (layout && leaf) {
+        layout = removeNode(layout, leaf.id);
+        if (!layout) pane = null;
+        else if (pane === leaf.id || !pane || !findLeaf(layout, pane)) {
+          pane = leaves(layout)[0]?.id ?? null;
+        }
+      }
+      return {
+        tabs: { ...s.tabs, [tabId]: { ...tab, poppedOut: true } },
+        layouts: { ...s.layouts, [ws]: layout },
+        activePane: { ...s.activePane, [ws]: pane },
+      };
+    });
+  },
+
+  // The floating window closed: drop the flag and place the tab back into a
+  // pane of its workspace (its native view was already reattached by main).
+  popInTab: (tabId) => {
+    const state = get();
+    const tab = state.tabs[tabId];
+    if (!tab) return;
+    const ws = tab.workspaceId;
+    set((s) => ({
+      tabs: { ...s.tabs, [tabId]: { ...s.tabs[tabId], poppedOut: false } },
+      activeWorkspaceId: ws,
+      ...placeTab({ ...s, activeWorkspaceId: ws } as BrowserState, ws, tabId),
+    }));
+  },
+
+  toggleMute: (tabId) => {
+    const tab = get().tabs[tabId];
+    if (!tab) return;
+    const muted = !tab.muted;
+    api.setMuted(tabId, muted);
+    set((s) =>
+      s.tabs[tabId] ? { tabs: { ...s.tabs, [tabId]: { ...s.tabs[tabId], muted } } } : s
+    );
+  },
+
+  duplicateTab: (tabId) => {
+    const tab = get().tabs[tabId];
+    if (tab) get().newTab(tab.url, { workspaceId: tab.workspaceId });
+  },
+
+  // Close every other (unpinned) tab in this tab's workspace.
+  closeOtherTabs: (tabId) => {
+    const s = get();
+    const tab = s.tabs[tabId];
+    if (!tab) return;
+    const ids = (s.tabOrder[tab.workspaceId] ?? []).filter(
+      (id) => id !== tabId && !s.tabs[id]?.pinned
+    );
+    for (const id of ids) s.closeTab(id);
+  },
+
+  // Close the (unpinned) tabs sitting after this one in the sidebar order.
+  closeTabsToRight: (tabId) => {
+    const s = get();
+    const tab = s.tabs[tabId];
+    if (!tab) return;
+    const order = s.tabOrder[tab.workspaceId] ?? [];
+    const idx = order.indexOf(tabId);
+    if (idx < 0) return;
+    const ids = order.slice(idx + 1).filter((id) => !s.tabs[id]?.pinned);
+    for (const id of ids) s.closeTab(id);
+  },
+
+  openTabMenu: (tabId, x, y) => set({ tabMenu: { tabId, x, y } }),
+  closeTabMenu: () => set({ tabMenu: null }),
+
+  addPermissionRequest: (req) =>
+    set((s) =>
+      s.permissionRequests.some((r) => r.id === req.id)
+        ? s
+        : { permissionRequests: [...s.permissionRequests, req] }
+    ),
+  resolvePermissionRequest: (id) =>
+    set((s) => ({
+      permissionRequests: s.permissionRequests.filter((r) => r.id !== id),
+    })),
+
+  addCustomEngine: (key, home, search) =>
+    set((s) => {
+      const next = { ...s.customEngines, [key.toLowerCase()]: { home, search } };
+      setCustomEngines(next);
+      return { customEngines: next };
+    }),
+
+  removeCustomEngine: (key) =>
+    set((s) => {
+      const next = { ...s.customEngines };
+      delete next[key.toLowerCase()];
+      setCustomEngines(next);
+      return { customEngines: next };
+    }),
+
+  setMediaPanelOpen: (open) => set({ mediaPanelOpen: open }),
+
+  setTabGroup: (tabId, group) =>
+    set((s) =>
+      s.tabs[tabId]
+        ? { tabs: { ...s.tabs, [tabId]: { ...s.tabs[tabId], group: group || undefined } } }
+        : s
+    ),
+
+  // Move keyboard focus to the pane adjacent to the active one in the given
+  // direction, using the layout's geometry (no DOM measurement needed).
+  focusPaneDir: (dir) => {
+    const state = get();
+    const ws = state.activeWorkspaceId;
+    const layout = state.layouts[ws];
+    if (!layout) return;
+    const activeId = state.activePane[ws] ?? leaves(layout)[0]?.id;
+    if (!activeId) return;
+    const rects = computeRects(layout, { x: 0, y: 0, w: 1, h: 1 });
+    const targetId = paneInDirection(rects, activeId, dir);
+    if (!targetId) return;
+    const targetLeaf = findLeaf(layout, targetId);
+    set((s) => ({ activePane: { ...s.activePane, [ws]: targetId } }));
+    if (targetLeaf) api.focusTab(targetLeaf.tabId);
+  },
 }));
 
 /** The tab shown in the active pane of the active workspace, if any. */

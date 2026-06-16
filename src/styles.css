@@ -1,5 +1,18 @@
 @import "tailwindcss";
 
+:root {
+  /* Chrome surface defaults; overridden inline from the active theme */
+  --mb-pane: #10151d;
+  --mb-pane-border: #1c232e;
+  --mb-pane-active: #3b4d6b;
+  --mb-surface: #141a23;
+  --mb-hover: #1a212c;
+  --mb-selected: #1f2c42;
+  --mb-selected-soft: #151c27;
+  --mb-modal: #141a22;
+  --mb-accent: #7aa2f7;
+}
+
 html,
 body,
 #root {
@@ -17,16 +30,74 @@ textarea {
 }
 
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #232a36;
-  border-radius: 4px;
+  background: color-mix(in srgb, var(--mb-accent) 16%, #1c222d);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #2e3744;
+  background: color-mix(in srgb, var(--mb-accent) 32%, #1c222d);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+::-webkit-scrollbar-button {
+  display: none;
+  height: 0;
+  width: 0;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Startup animation */
+@keyframes intro-letter {
+  from {
+    opacity: 0;
+    transform: translateY(22px);
+    filter: blur(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+
+@keyframes intro-line {
+  from {
+    transform: scaleX(0);
+    opacity: 0;
+  }
+  to {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+}
+
+@keyframes intro-drift-a {
+  0%,
+  100% {
+    transform: translate(-30%, -20%) scale(1);
+  }
+  50% {
+    transform: translate(-10%, -5%) scale(1.2);
+  }
+}
+
+@keyframes intro-drift-b {
+  0%,
+  100% {
+    transform: translate(30%, 20%) scale(1.1);
+  }
+  50% {
+    transform: translate(5%, 0%) scale(0.95);
+  }
 }
