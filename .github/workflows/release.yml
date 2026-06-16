@@ -25,14 +25,25 @@ jobs:
           node-version: 20
           cache: npm
 
+      # node-gyp on the runner's default Python 3.14 fails to configure; pin a
+      # version it can build better-sqlite3 against.
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Skip the node-targeted native build on install; electron-rebuild below
+      # compiles better-sqlite3 against Electron's ABI instead.
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Build renderer + main
         run: npm run build
 
       - name: Rebuild native modules for Electron
         run: npm run rebuild
+        env:
+          PYTHON: python
 
       - name: Build and publish (electron-builder)
         run: npx electron-builder --win --publish always

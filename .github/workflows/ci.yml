@@ -21,8 +21,11 @@ jobs:
           node-version: 20
           cache: npm
 
+      # --ignore-scripts skips better-sqlite3's native build: typecheck and the
+      # esbuild/vite builds never load it (it's marked external), and the
+      # runner can't reliably compile it from source.
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Typecheck
         run: npm run typecheck
