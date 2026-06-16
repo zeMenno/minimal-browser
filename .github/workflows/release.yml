@@ -1,8 +1,12 @@
 name: Release
 
-# Cut a release by pushing a version tag, e.g. `v0.4.0`. The build is uploaded
-# to the GitHub Release for that tag (installer + latest.yml), which is what the
-# in-app auto-updater reads. Can also be run manually from the Actions tab.
+# Cut a release by pushing a version tag, e.g. `v0.4.1`. Each OS builds its own
+# installer, then a single job publishes them all to ONE GitHub Release for that
+# tag (installers + latest*.yml), which is what the in-app auto-updater reads.
+#
+# Why split build + publish? Letting electron-builder publish from multiple jobs
+# races and creates duplicate releases. Here the builds only produce artifacts;
+# one final job creates the release and attaches everything — no race.
 on:
   push:
     tags:
@@ -13,8 +17,19 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: windows-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: --win
+          - os: ubuntu-latest
+            platform: --linux
+          # Add macOS later (needs an Apple signing cert for auto-update):
+          # - os: macos-latest
+          #   platform: --mac
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,8 +40,8 @@ jobs:
           node-version: 20
           cache: npm
 
-      # node-gyp on the runner's default Python 3.14 fails to configure; pin a
-      # version it can build better-sqlite3 against.
+      # node-gyp on the runner's default Python (3.14) fails to configure; pin a
+      # version it can build better-sqlite3 against. Also gives Linux a `python`.
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -45,7 +60,43 @@ jobs:
         env:
           PYTHON: python
 
-      - name: Build and publish (electron-builder)
-        run: npx electron-builder --win --publish always
+      # Build only — never publish from here (the publish job does that once).
+      - name: Build installer (electron-builder)
+        run: npx electron-builder ${{ matrix.platform }} --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Upload just the distributables + update manifests (not the unpacked app).
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.os }}
+          if-no-files-found: error
+          retention-days: 5
+          path: |
+            release/*.exe
+            release/*.exe.blockmap
+            release/*.AppImage
+            release/*.deb
+            release/*.yml
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      # One release per tag; every OS's artifacts are attached to it. Idempotent
+      # on re-runs (existing assets are overwritten).
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          files: artifacts/**/*
+          fail_on_unmatched_files: true

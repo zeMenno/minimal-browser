@@ -49,6 +49,14 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "include": "build/installer.nsh"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Network",
+      "maintainer": "zeMenno"
     }
   },
   "dependencies": {

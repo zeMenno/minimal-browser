@@ -44,10 +44,13 @@ npm version patch        # bumps package.json + creates a git tag (use minor/maj
 git push --follow-tags   # pushing the vX.Y.Z tag triggers .github/workflows/release.yml
 ```
 
-The workflow ([.github/workflows/release.yml](.github/workflows/release.yml)) runs on
-`windows-latest`, builds, and runs `electron-builder --publish always`, which uploads the
-installer plus the `latest.yml` manifest to the release for that tag. Installed copies read that
-manifest from GitHub Releases (`build.publish` in [package.json](package.json)) to detect updates.
+The workflow ([.github/workflows/release.yml](.github/workflows/release.yml)) builds on a per-OS
+matrix (Windows `.exe` and Linux `.AppImage`/`.deb` today; macOS is a commented-out matrix entry
+ready to enable once an Apple signing cert is available). Each OS builds its own installer with
+`electron-builder --publish never`, then a single `publish` job attaches them all — plus the
+`latest*.yml` update manifests — to one GitHub Release for the tag. Splitting build from publish
+avoids electron-builder's duplicate-release race. Installed copies read the manifest from GitHub
+Releases (`build.publish` in [package.json](package.json)) to detect updates.
 
 Builds are currently **unsigned** — Windows SmartScreen shows an "unknown publisher" prompt on the
 first manual install, but auto-update still works because each release is verified by its SHA512.
