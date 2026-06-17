@@ -1,4 +1,4 @@
-import { app, BrowserWindow, WebContentsView, dialog, ipcMain, net, shell } from "electron";
+import { app, BrowserWindow, Menu, MenuItemConstructorOptions, WebContentsView, clipboard, dialog, ipcMain, net, shell } from "electron";
 import path from "node:path";
 import fs from "node:fs";
 import extractZip from "extract-zip";
@@ -491,6 +491,122 @@ function navState(wc: Electron.WebContents): { canGoBack: boolean; canGoForward:
   };
 }
 
+// ---------------------------------------------------------------------------
+// In-page context menu: a WebContentsView shows nothing on right-click unless
+// the main process builds a menu from the `context-menu` event. We assemble a
+// Chrome-like, context-aware menu (links, images, selection, editable fields)
+// and fall back to page navigation + Inspect when nothing is targeted.
+// ---------------------------------------------------------------------------
+function searchUrlFor(text: string): string {
+  return `https://duckduckgo.com/?q=${encodeURIComponent(text)}`;
+}
+
+function ellipsize(text: string, max = 32): string {
+  const clean = text.trim().replace(/\s+/g, " ");
+  return clean.length > max ? `${clean.slice(0, max)}…` : clean;
+}
+
+function showPageContextMenu(
+  tabId: string,
+  wc: Electron.WebContents,
+  params: Electron.ContextMenuParams,
+): void {
+  if (!win) return;
+  const items: MenuItemConstructorOptions[] = [];
+  const sep = () => {
+    if (items.length && items[items.length - 1].type !== "separator") {
+      items.push({ type: "separator" });
+    }
+  };
+
+  if (params.linkURL) {
+    items.push({
+      label: "Open Link in New Tab",
+      click: () => sendToUI("tab:open", { url: params.linkURL, fromTabId: tabId }),
+    });
+    items.push({
+      label: "Copy Link Address",
+      click: () => clipboard.writeText(params.linkURL),
+    });
+    sep();
+  }
+
+  if (params.mediaType === "image" && params.srcURL) {
+    items.push({
+      label: "Open Image in New Tab",
+      click: () => sendToUI("tab:open", { url: params.srcURL, fromTabId: tabId }),
+    });
+    items.push({
+      label: "Save Image As…",
+      click: () => wc.downloadURL(params.srcURL),
+    });
+    items.push({
+      label: "Copy Image",
+      click: () => wc.copyImageAt(params.x, params.y),
+    });
+    items.push({
+      label: "Copy Image Address",
+      click: () => clipboard.writeText(params.srcURL),
+    });
+    sep();
+  }
+
+  // Spellcheck suggestions for a misspelled word in an editable field.
+  if (params.misspelledWord && params.dictionarySuggestions.length) {
+    for (const suggestion of params.dictionarySuggestions.slice(0, 5)) {
+      items.push({
+        label: suggestion,
+        click: () => wc.replaceMisspelling(suggestion),
+      });
+    }
+    sep();
+  }
+
+  if (params.isEditable) {
+    items.push({ role: "cut", enabled: params.editFlags.canCut });
+    items.push({ role: "copy", enabled: params.editFlags.canCopy });
+    items.push({ role: "paste", enabled: params.editFlags.canPaste });
+    items.push({ role: "selectAll" });
+    sep();
+  } else if (params.selectionText) {
+    items.push({ role: "copy" });
+    items.push({
+      label: `Search DuckDuckGo for "${ellipsize(params.selectionText)}"`,
+      click: () =>
+        sendToUI("tab:open", {
+          url: searchUrlFor(params.selectionText),
+          fromTabId: tabId,
+        }),
+    });
+    sep();
+  }
+
+  // Page-level actions, always available as the baseline menu.
+  items.push({
+    label: "Back",
+    enabled: wc.navigationHistory.canGoBack(),
+    click: () => wc.navigationHistory.goBack(),
+  });
+  items.push({
+    label: "Forward",
+    enabled: wc.navigationHistory.canGoForward(),
+    click: () => wc.navigationHistory.goForward(),
+  });
+  items.push({ label: "Reload", click: () => wc.reload() });
+  sep();
+  items.push({ label: "Copy Page URL", click: () => clipboard.writeText(wc.getURL()) });
+  sep();
+  items.push({
+    label: "Inspect Element",
+    click: () => {
+      wc.inspectElement(params.x, params.y);
+      if (wc.isDevToolsOpened()) wc.devToolsWebContents?.focus();
+    },
+  });
+
+  Menu.buildFromTemplate(items).popup({ window: win });
+}
+
 function ensureView(tabId: string, url?: string, partition?: string): void {
   if (!win || views.has(tabId)) return;
   const view = new WebContentsView({
@@ -528,6 +644,8 @@ function ensureView(tabId: string, url?: string, partition?: string): void {
       openExternalApp(navUrl);
     }
   });
+
+  wc.on("context-menu", (_event, params) => showPageContextMenu(tabId, wc, params));
 
   wc.on("dom-ready", () => void injectScrollbar(tabId));
 
